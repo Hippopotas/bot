@@ -39,6 +39,9 @@ exports.commandcharacter = '.';
 // no rank is specified in settings.json
 exports.defaultrank = '%';
 
+// The server's usergroups, in order from lowest to highest priority.
+exports.groups = ' +%@#&~';
+
 // Whether this file should be watched for changes or not.
 // If you change this option, the server has to be restarted in order for it to
 // take effect.

@@ -19,19 +19,19 @@ exports.commands = {
 	 */
 
 	credits: 'about',
-	about: function (arg, by, room) {
-		var text = this.hasRank(by, '#&~') || room.charAt(0) === ',' ? '' : '/pm ' + by + ', ';
-		text += '**Pokémon Showdown Bot** by: Quinella, TalkTakesTime, and Morfent';
+	about: function (arg, user, room) {
+		var text = user.hasRank(room, '#') || room === user ? '' : '/pm ' + user.id + ', ';
+		text += '**Pokémon Showdown Bot** user: Quinella, TalkTakesTime, and Morfent';
 		this.say(room, text);
 	},
-	git: function (arg, by, room) {
-		var text = Config.excepts.indexOf(toId(by)) < 0 ? '/pm ' + by + ', ' : '';
+	git: function (arg, user, room) {
+		var text = user.isExcepted ? '/pm ' + user.id + ', ' : '';
 		text += '**Pokemon Showdown Bot** source code: ' + Config.fork;
 		this.say(room, text);
 	},
 	help: 'guide',
-	guide: function (arg, by, room) {
-		var text = this.hasRank(by, '#&~') || room.charAt(0) === ',' ? '' : '/pm ' + by + ', ';
+	guide: function (arg, user, room) {
+		var text = user.hasRank(room, '#') || room === user ? '' : '/pm ' + user.id + ', ';
 		if (Config.botguide) {
 			text += 'A guide on how to use this bot can be found here: ' + Config.botguide;
 		} else {
@@ -48,8 +48,8 @@ exports.commands = {
 	 * or to help with upkeep of the bot.
 	 */
 
-	reload: function (arg, by, room) {
-		if (Config.excepts.indexOf(toId(by)) < 0) return false;
+	reload: function (arg, user, room) {
+		if (!user.isExcepted) return false;
 		try {
 			this.uncacheTree('./commands.js');
 			Commands = require('./commands.js').commands;
@@ -58,37 +58,40 @@ exports.commands = {
 			error('failed to reload: ' + e.stack);
 		}
 	},
-	custom: function (arg, by, room) {
-		if (Config.excepts.indexOf(toId(by)) < 0) return false;
+	custom: function (arg, user, room) {
+		if (!user.isExcepted) return false;
 		// Custom commands can be executed in an arbitrary room using the syntax
 		// ".custom [room] command", e.g., to do !data pikachu in the room lobby,
 		// the command would be ".custom [lobby] !data pikachu". However, using
 		// "[" and "]" in the custom command to be executed can mess this up, so
 		// be careful with them.
-		if (arg.indexOf('[') === 0 && arg.indexOf(']') > -1) {
-			room = arg.slice(1, arg.indexOf(']'));
-			arg = arg.substr(arg.indexOf(']') + 1).trim();
+		if (arg.indexOf('[') !== 0 || arg.indexOf(']') < 0) {
+			return this.say(room, arg);
 		}
-		this.say(room, arg);
+		var tarRoomid = arg.slice(1, arg.indexOf(']'));
+		var tarRoom = Rooms.get(tarRoomid);
+		if (!tarRoom) return this.say(room, Users.self.name + ' is not in room ' + tarRoomid + '!');
+		arg = arg.substr(arg.indexOf(']') + 1).trim();
+		this.say(tarRoom, arg);
 	},
-	js: function (arg, by, room) {
-		if (Config.excepts.indexOf(toId(by)) === -1) return false;
+	js: function (arg, user, room) {
+		if (!user.isExcepted) return false;
 		try {
-			var result = eval(arg.trim());
+			let result = eval(arg.trim());
 			this.say(room, JSON.stringify(result));
 		} catch (e) {
 			this.say(room, e.name + ": " + e.message);
 		}
 	},
-	uptime: function (arg, by, room) {
-		var text = Config.excepts.indexOf(toId(by)) < 0 ? '/pm ' + by + ', **Uptime:** ' : '**Uptime:** ';
+	uptime: function (arg, user, room) {
+		var text = !user.isExcepted ? '/pm ' + user.id + ', **Uptime:** ' : '**Uptime:** ';
 		var divisors = [52, 7, 24, 60, 60];
 		var units = ['week', 'day', 'hour', 'minute', 'second'];
 		var buffer = [];
 		var uptime = ~~(process.uptime());
 		do {
-			var divisor = divisors.pop();
-			var unit = uptime % divisor;
+			let divisor = divisors.pop();
+			let unit = uptime % divisor;
 			buffer.push(unit > 1 ? unit + ' ' + units.pop() + 's' : unit + ' ' + units.pop());
 			uptime = ~~(uptime / divisor);
 		} while (uptime);
@@ -122,8 +125,8 @@ exports.commands = {
 	 */
 
 	settings: 'set',
-	set: function (arg, by, room) {
-		if (!this.hasRank(by, '#&~') || room.charAt(0) === ',') return false;
+	set: function (arg, user, room) {
+		if (!user.hasRank(room, '#') || room === user) return false;
 
 		var settable = {
 			autoban: 1,
@@ -151,7 +154,7 @@ exports.commands = {
 		var cmd = toId(opts[0]);
 		var setting;
 		if (cmd === 'm' || cmd === 'mod' || cmd === 'modding') {
-			var modOpt = toId(opts[1]);
+			let modOpt = toId(opts[1]);
 			if (!modOpts[modOpt]) return this.say(room, 'Incorrect command: correct syntax is ' + Config.commandcharacter + 'set mod, [' +
 				Object.keys(modOpts).join('/') + '](, [on/off])');
 
@@ -159,14 +162,15 @@ exports.commands = {
 			if (!setting) return this.say(room, 'Moderation for ' + modOpt + ' in this room is currently ' +
 				(this.settings.modding[room] && modOpt in this.settings.modding[room] ? 'OFF' : 'ON') + '.');
 
+			let roomid = room.id;
 			if (!this.settings.modding) this.settings.modding = {};
-			if (!this.settings.modding[room]) this.settings.modding[room] = {};
+			if (!this.settings.modding[roomid]) this.settings.modding[roomid] = {};
 			if (setting === 'on') {
-				delete this.settings.modding[room][modOpt];
-				if (Object.isEmpty(this.settings.modding[room])) delete this.settings.modding[room];
+				delete this.settings.modding[roomid][modOpt];
+				if (Object.isEmpty(this.settings.modding[roomid])) delete this.settings.modding[roomid];
 				if (Object.isEmpty(this.settings.modding)) delete this.settings.modding;
 			} else if (setting === 'off') {
-				this.settings.modding[room][modOpt] = 0;
+				this.settings.modding[roomid][modOpt] = 0;
 			} else {
 				return this.say(room, 'Incorrect command: correct syntax is ' + Config.commandcharacter + 'set mod, [' +
 					Object.keys(modOpts).join('/') + '](, [on/off])');
@@ -207,15 +211,16 @@ exports.commands = {
 			'true': true
 		};
 
+		var roomid = room.id;
 		setting = opts[1].trim().toLowerCase();
 		if (!setting) {
-			var msg = '' + Config.commandcharacter + '' + cmd + ' is ';
-			if (!this.settings[cmd] || (!(room in this.settings[cmd]))) {
+			let msg = '' + Config.commandcharacter + '' + cmd + ' is ';
+			if (!this.settings[cmd] || (!(roomid in this.settings[cmd]))) {
 				msg += 'available for users of rank ' + ((cmd === 'autoban' || cmd === 'banword') ? '#' : Config.defaultrank) + ' and above.';
-			} else if (this.settings[cmd][room] in settingsLevels) {
-				msg += 'available for users of rank ' + this.settings[cmd][room] + ' and above.';
+			} else if (this.settings[cmd][roomid] in settingsLevels) {
+				msg += 'available for users of rank ' + this.settings[cmd][roomid] + ' and above.';
 			} else {
-				msg += this.settings[cmd][room] ? 'available for all users in this room.' : 'not available for use in this room.';
+				msg += this.settings[cmd][roomid] ? 'available for all users in this room.' : 'not available for use in this room.';
 			}
 
 			return this.say(room, msg);
@@ -223,32 +228,34 @@ exports.commands = {
 
 		if (!(setting in settingsLevels)) return this.say(room, 'Unknown option: "' + setting + '". Valid settings are: off/disable/false, +, %, @, #, &, ~, on/enable/true.');
 		if (!this.settings[cmd]) this.settings[cmd] = {};
-		this.settings[cmd][room] = settingsLevels[setting];
+		this.settings[cmd][roomid] = settingsLevels[setting];
 
 		this.writeSettings();
 		this.say(room, 'The command ' + Config.commandcharacter + '' + cmd + ' is now ' +
 			(settingsLevels[setting] === setting ? ' available for users of rank ' + setting + ' and above.' :
-			(this.settings[cmd][room] ? 'available for all users in this room.' : 'unavailable for use in this room.')));
+			(this.settings[cmd][roomid] ? 'available for all users in this room.' : 'unavailable for use in this room.')));
 	},
 	blacklist: 'autoban',
 	ban: 'autoban',
 	ab: 'autoban',
-	autoban: function (arg, by, room) {
-		if (!this.canUse('autoban', room, by) || room.charAt(0) === ',') return false;
-		if (!this.hasRank(this.ranks[room] || ' ', '@#&~')) return this.say(room, Config.nick + ' requires rank of @ or higher to (un)blacklist.');
+	autoban: function (arg, user, room) {
+		if (!this.canUse('autoban', room, user) || room === user) return false;
+		if (!Users.self.hasRank(room, '@')) return this.say(room, Users.self.name + ' requires rank of @ or higher to (un)blacklist.');
 
 		arg = arg.split(',');
 		var added = [];
 		var illegalNick = [];
 		var alreadyAdded = [];
 		if (!arg.length || (arg.length === 1 && !arg[0].trim().length)) return this.say(room, 'You must specify at least one user to blacklist.');
-		for (var i = 0; i < arg.length; i++) {
-			var tarUser = toId(arg[i]);
+
+		var roomid = room.id;
+		for (let i = 0; i < arg.length; i++) {
+			let tarUser = toId(arg[i]);
 			if (tarUser.length < 1 || tarUser.length > 18) {
 				illegalNick.push(tarUser);
 				continue;
 			}
-			if (!this.blacklistUser(tarUser, room)) {
+			if (!this.blacklistUser(tarUser, roomid)) {
 				alreadyAdded.push(tarUser);
 				continue;
 			}
@@ -259,7 +266,7 @@ exports.commands = {
 		var text = '';
 		if (added.length) {
 			text += 'User' + (added.length > 1 ? 's "' + added.join('", "') + '" were' : ' "' + added[0] + '" was') + ' added to the blacklist';
-			this.say(room, '/modnote ' + text + ' by ' + by + '.');
+			this.say(room, '/modnote ' + text + ' by user ' + user.name + '.');
 			text += '.';
 			this.writeSettings();
 		}
@@ -271,21 +278,23 @@ exports.commands = {
 	unblacklist: 'unautoban',
 	unban: 'unautoban',
 	unab: 'unautoban',
-	unautoban: function (arg, by, room) {
-		if (!this.canUse('autoban', room, by) || room.charAt(0) === ',') return false;
-		if (!this.hasRank(this.ranks[room] || ' ', '@#&~')) return this.say(room, Config.nick + ' requires rank of @ or higher to (un)blacklist.');
+	unautoban: function (arg, user, room) {
+		if (!this.canUse('autoban', room, user) || room === user) return false;
+		if (!Users.self.hasRank(room, '@')) return this.say(room, Users.self.name + ' requires rank of @ or higher to (un)blacklist.');
 
 		arg = arg.split(',');
 		var removed = [];
 		var notRemoved = [];
 		if (!arg.length || (arg.length === 1 && !arg[0].trim().length)) return this.say(room, 'You must specify at least one user to unblacklist.');
-		for (var i = 0; i < arg.length; i++) {
-			var tarUser = toId(arg[i]);
+		
+		var roomid = room.id;
+		for (let i = 0; i < arg.length; i++) {
+			let tarUser = toId(arg[i]);
 			if (tarUser.length < 1 || tarUser.length > 18) {
 				notRemoved.push(tarUser);
 				continue;
 			}
-			if (!this.unblacklistUser(tarUser, room)) {
+			if (!this.unblacklistUser(tarUser, roomid)) {
 				notRemoved.push(tarUser);
 				continue;
 			}
@@ -296,7 +305,7 @@ exports.commands = {
 		var text = '';
 		if (removed.length) {
 			text += 'User' + (removed.length > 1 ? 's "' + removed.join('", "') + '" were' : ' "' + removed[0] + '" was') + ' removed from the blacklist';
-			this.say(room, '/modnote ' + text + ' by ' + by + '.');
+			this.say(room, '/modnote ' + text + ' by user ' + user.name + '.');
 			text += '.';
 			this.writeSettings();
 		}
@@ -304,9 +313,9 @@ exports.commands = {
 		this.say(room, text);
 	},
 	rab: 'regexautoban',
-	regexautoban: function (arg, by, room) {
-		if (Config.regexautobanwhitelist.indexOf(toId(by)) < 0 || !this.canUse('autoban', room, by) || room.charAt(0) === ',') return false;
-		if (!this.hasRank(this.ranks[room] || ' ', '@#&~')) return this.say(room, Config.nick + ' requires rank of @ or higher to (un)blacklist.');
+	regexautoban: function (arg, user, room) {
+		if (!user.isRegexWhitelisted || !this.canUse('autoban', room, user) || room === user) return false;
+		if (!Users.self.hasRank(room, '@')) return this.say(room, Users.self.name + ' requires rank of @ or higher to (un)blacklist.');
 		if (!arg) return this.say(room, 'You must specify a regular expression to (un)blacklist.');
 
 		try {
@@ -316,63 +325,64 @@ exports.commands = {
 		}
 
 		arg = '/' + arg + '/i';
-		if (!this.blacklistUser(arg, room)) return this.say(room, '/' + arg + ' is already present in the blacklist.');
+		if (!this.blacklistUser(arg, room.id)) return this.say(room, '/' + arg + ' is already present in the blacklist.');
 
 		this.writeSettings();
-		this.say(room, '/modnote Regular expression ' + arg + ' was added to the blacklist by ' + by + '.');
+		this.say(room, '/modnote Regular expression ' + arg + ' was added to the blacklist by user ' + user.name + '.');
 		this.say(room, 'Regular expression ' + arg + ' was added to the blacklist.');
 	},
 	unrab: 'unregexautoban',
-	unregexautoban: function (arg, by, room) {
-		if (Config.regexautobanwhitelist.indexOf(toId(by)) < 0 || !this.canUse('autoban', room, by) || room.charAt(0) === ',') return false;
-		if (!this.hasRank(this.ranks[room] || ' ', '@#&~')) return this.say(room, Config.nick + ' requires rank of @ or higher to (un)blacklist.');
+	unregexautoban: function (arg, user, room) {
+		if (!user.isRegexWhitelisted || !this.canUse('autoban', room, user) || room === user) return false;
+		if (!Users.self.hasRank(room, '@')) return this.say(room, Users.self.name + ' requires rank of @ or higher to (un)blacklist.');
 		if (!arg) return this.say(room, 'You must specify a regular expression to (un)blacklist.');
 
 		arg = '/' + arg.replace(/\\\\/g, '\\') + '/i';
 		if (!this.unblacklistUser(arg, room)) return this.say(room,'/' + arg + ' is not present in the blacklist.');
 
 		this.writeSettings();
-		this.say(room, '/modnote Regular expression ' + arg + ' was removed from the blacklist by ' + by + '.');
+		this.say(room, '/modnote Regular expression ' + arg + ' was removed from the blacklist user by ' + user.name + '.');
 		this.say(room, 'Regular expression ' + arg + ' was removed from the blacklist.');
 	},
 	viewbans: 'viewblacklist',
 	vab: 'viewblacklist',
 	viewautobans: 'viewblacklist',
-	viewblacklist: function (arg, by, room) {
-		if (!this.canUse('autoban', room, by) || room.charAt(0) === ',') return false;
+	viewblacklist: function (arg, user, room) {
+		if (!this.canUse('autoban', room, user) || room === user) return false;
 
 		var text = '';
-		if (!this.settings.blacklist || !this.settings.blacklist[room]) {
+		var roomid = room.id;
+		if (!this.settings.blacklist || !this.settings.blacklist[roomid]) {
 			text = 'No users are blacklisted in this room.';
 		} else {
 			if (arg.length) {
-				var nick = toId(arg);
+				let nick = toId(arg);
 				if (nick.length < 1 || nick.length > 18) {
 					text = 'Invalid nickname: "' + nick + '".';
 				} else {
-					text = 'User "' + nick + '" is currently ' + (nick in this.settings.blacklist[room] ? '' : 'not ') + 'blacklisted in ' + room + '.';
+					text = 'User "' + nick + '" is currently ' + (nick in this.settings.blacklist[roomid] ? '' : 'not ') + 'blacklisted in ' + roomid + '.';
 				}
 			} else {
-				var nickList = Object.keys(this.settings.blacklist[room]);
-				if (!nickList.length) return this.say(room, '/pm ' + by + ', No users are blacklisted in this room.');
-				this.uploadToHastebin('The following users are banned in ' + room + ':\n\n' + nickList.join('\n'), function (link) {
-					this.say(room, "/pm " + by + ", Blacklist for room " + room + ": " + link);
+				let nickList = Object.keys(this.settings.blacklist[roomid]);
+				if (!nickList.length) return this.say(room, '/pm ' + user.id + ', No users are blacklisted in this room.');
+				this.uploadToHastebin('The following users are banned in ' + roomid + ':\n\n' + nickList.join('\n'), function (link) {
+					this.say(room, "/pm " + user.id + ", Blacklist for room " + roomid + ": " + link);
 				}.bind(this));
 				return;
 			}
 		}
-		this.say(room, '/pm ' + by + ', ' + text);
+		this.say(room, '/pm ' + user.id + ', ' + text);
 	},
 	banphrase: 'banword',
-	banword: function (arg, by, room) {
-		if (!this.canUse('banword', room, by)) return false;
+	banword: function (arg, user, room) {
+		if (!this.canUse('banword', room, user)) return false;
 		if (!this.settings.bannedphrases) this.settings.bannedphrases = {};
 		arg = arg.trim().toLowerCase();
 		if (!arg) return false;
-		var tarRoom = room;
+		var tarRoom = room.id;
 
-		if (room.charAt(0) === ',') {
-			if (Config.excepts.indexOf(toId(by)) < 0) return false;
+		if (room === user) {
+			if (!user.isExcepted) return false;
 			tarRoom = 'global';
 		}
 
@@ -383,14 +393,14 @@ exports.commands = {
 		this.say(room, "Phrase \"" + arg + "\" is now banned.");
 	},
 	unbanphrase: 'unbanword',
-	unbanword: function (arg, by, room) {
-		if (!this.canUse('banword', room, by)) return false;
+	unbanword: function (arg, user, room) {
+		if (!this.canUse('banword', room, user)) return false;
 		arg = arg.trim().toLowerCase();
 		if (!arg) return false;
-		var tarRoom = room;
+		var tarRoom = room.id;
 
-		if (room.charAt(0) === ',') {
-			if (Config.excepts.indexOf(toId(by)) < 0) return false;
+		if (room === user) {
+			if (!user.isExcepted) return false;
 			tarRoom = 'global';
 		}
 
@@ -404,13 +414,13 @@ exports.commands = {
 	},
 	viewbannedphrases: 'viewbannedwords',
 	vbw: 'viewbannedwords',
-	viewbannedwords: function (arg, by, room) {
-		if (!this.canUse('banword', room, by)) return false;
+	viewbannedwords: function (arg, user, room) {
+		if (!this.canUse('banword', room, user)) return false;
 		arg = arg.trim().toLowerCase();
-		var tarRoom = room;
+		var tarRoom = room.id;
 
-		if (room.charAt(0) === ',') {
-			if (Config.excepts.indexOf(toId(by)) < 0) return false;
+		if (room === user) {
+			if (!user.isExcepted) return false;
 			tarRoom = 'global';
 		}
 
@@ -422,10 +432,10 @@ exports.commands = {
 				text = "The phrase \"" + arg + "\" is currently " + (arg in this.settings.bannedphrases[tarRoom] ? "" : "not ") + "banned " +
 					(room.charAt(0) === ',' ? "globally" : "in " + room) + ".";
 			} else {
-				var banList = Object.keys(this.settings.bannedphrases[tarRoom]);
+				let banList = Object.keys(this.settings.bannedphrases[tarRoom]);
 				if (!banList.length) return this.say(room, "No phrases are banned in this room.");
-				this.uploadToHastebin("The following phrases are banned " + (room.charAt(0) === ',' ? "globally" : "in " + room) + ":\n\n" + banList.join('\n'), function (link) {
-					this.say(room, (room.charAt(0) === ',' ? "" : "/pm " + by + ", ") + "Banned Phrases " + (room.charAt(0) === ',' ? "globally" : "in " + room) + ": " + link);
+				this.uploadToHastebin("The following phrases are banned " + (room === user ? "globally" : "in " + room.id) + ":\n\n" + banList.join('\n'), function (link) {
+					this.say(room, (room === user ? "" : "/pm " + user.id + ", ") + "Banned Phrases " + (room === user ? "globally" : "in " + room.id) + ": " + link);
 				}.bind(this));
 				return;
 			}
@@ -440,12 +450,12 @@ exports.commands = {
 	 */
 
 	tell: 'say',
-	say: function (arg, by, room) {
-		if (!this.canUse('say', room, by)) return false;
-		this.say(room, stripCommands(arg) + ' (' + by + ' said this)');
+	say: function (arg, user, room) {
+		if (!this.canUse('say', room, user)) return false;
+		this.say(room, stripCommands(arg) + ' (' + user.name + ' said this)');
 	},
-	joke: function (arg, by, room) {
-		if (!this.canUse('joke', room, by) || room.charAt(0) === ',') return false;
+	joke: function (arg, user, room) {
+		if (!this.canUse('joke', room, user) || room === user) return false;
 		var self = this;
 
 		var reqOpt = {
@@ -456,7 +466,7 @@ exports.commands = {
 		var req = http.request(reqOpt, function (res) {
 			res.on('data', function (chunk) {
 				try {
-					var data = JSON.parse(chunk);
+					let data = JSON.parse(chunk);
 					self.say(room, data.value.joke.replace(/&quot;/g, "\""));
 				} catch (e) {
 					self.say(room, 'Sorry, couldn\'t fetch a random joke... :(');
@@ -466,18 +476,18 @@ exports.commands = {
 		req.end();
 	},
 	usage: 'usagestats',
-	usagestats: function (arg, by, room) {
-		var text = this.canUse('usagestats', room, by) || room.charAt(0) === ',' ? '' : '/pm ' + by + ', ';
+	usagestats: function (arg, user, room) {
+		var text = this.canUse('usagestats', room, user) || room === user ? '' : '/pm ' + user.id + ', ';
 		text += 'http://www.smogon.com/stats/2015-03/';
 		this.say(room, text);
 	},
-	seen: function (arg, by, room) { // this command is still a bit buggy
-		var text = (room.charAt(0) === ',' ? '' : '/pm ' + by + ', ');
+	seen: function (arg, user, room) { // this command is still a bit buggy
+		var text = (room === user ? '' : '/pm ' + user.id + ', ');
 		arg = toId(arg);
 		if (!arg || arg.length > 18) return this.say(room, text + 'Invalid username.');
-		if (arg === toId(by)) {
+		if (arg === user.id) {
 			text += 'Have you looked in the mirror lately?';
-		} else if (arg === toId(Config.nick)) {
+		} else if (arg === Users.self.id) {
 			text += 'You might be either blind or illiterate. Might want to get that checked out.';
 		} else if (!this.chatData[arg] || !this.chatData[arg].seenAt) {
 			text += 'The user ' + arg + ' has never been seen.';
@@ -487,8 +497,8 @@ exports.commands = {
 		}
 		this.say(room, text);
 	},
-	'8ball': function (arg, by, room) {
-		var text = this.canUse('8ball', room, by) || room.charAt(0) === ',' ? '' : '/pm ' + by + ', ';
+	'8ball': function (arg, user, room) {
+		var text = this.canUse('8ball', room, user) || room === user ? '' : '/pm ' + user.id + ', ';
 		var rand = ~~(20 * Math.random());
 
 		switch (rand) {
@@ -564,13 +574,13 @@ exports.commands = {
 	 */
 	espaol: 'esp',
 	ayuda: 'esp',
-	esp: function (arg, by, room) {
+	esp: function (arg, user, room) {
 		// links to relevant sites for the Wi-Fi room 
 		if (Config.serverid !== 'showdown') return false;
 		var text = '';
-		if (room === 'espaol') {
-			if (!this.canUse('guia', room, by)) text += '/pm ' + by + ', ';
-		} else if (room.charAt(0) !== ',') {
+		if (room.id === 'espaol') {
+			if (!this.canUse('guia', room, user)) text += '/pm ' + user.id + ', ';
+		} else if (room !== user) {
 			return false;
 		}
 		var messages = {
@@ -584,12 +594,12 @@ exports.commands = {
 		text += (toId(arg) ? (messages[toId(arg)] || '¡Bienvenidos a la comunidad de habla hispana! Si eres nuevo o tienes dudas revisa nuestro índice de guías: http://ps-salaespanol.proboards.com/thread/575/ndice-de-gu') : '¡Bienvenidos a la comunidad de habla hispana! Si eres nuevo o tienes dudas revisa nuestro índice de guías: http://ps-salaespanol.proboards.com/thread/575/ndice-de-gu');
 		this.say(room, text);
 	},
-	studio: function (arg, by, room) {
+	studio: function (arg, user, room) {
 		if (Config.serverid !== 'showdown') return false;
 		var text = '';
-		if (room === 'thestudio') {
-			if (!this.canUse('studio', room, by)) text += '/pm ' + by + ', ';
-		} else if (room.charAt(0) !== ',') {
+		if (room.id === 'thestudio') {
+			if (!this.canUse('studio', room, user)) text += '/pm ' + user.id + ', ';
+		} else if (room !== user) {
 			return false;
 		}
 		var messages = {
@@ -597,13 +607,13 @@ exports.commands = {
 		};
 		this.say(room, text + (messages[toId(arg)] || ('Welcome to The Studio, a music sharing room on PS!. If you have any questions, feel free to PM a room staff member. Available commands for .studio: ' + Object.keys(messages).join(', '))));
 	},
-	wifi: function (arg, by, room) {
+	wifi: function (arg, user, room) {
 		// links to relevant sites for the Wi-Fi room 
 		if (Config.serverid !== 'showdown') return false;
 		var text = '';
-		if (room === 'wifi') {
-			if (!this.canUse('wifi', room, by)) text += '/pm ' + by + ', ';
-		} else if (room.charAt(0) !== ',') {
+		if (room.id === 'wifi') {
+			if (!this.canUse('wifi', room, user)) text += '/pm ' + user.id + ', ';
+		} else if (room !== user) {
 			return false;
 		}
 
@@ -643,121 +653,124 @@ exports.commands = {
 		case 'checkfc':
 			if (!Config.googleapikey) return this.say(room, text + 'A Google API key has not been provided and is required for this command to work.');
 			if (arg.length < 2) return this.say(room, text + 'Usage: .wifi checkfc, [fc]');
-			this.wifiRoom = this.wifiroom || {docRevs: ['', ''], scammers : {}, cloners: []};
+			let wifiRoom = room.id === 'wifi' ? room : Rooms.get('wifi');
+			if (!wifiRoom) return false;
+			if (!wifiRoom.data) wifiRoom.data = {
+				docRevs: ['', ''],
+				scammers : {},
+				cloners: []
+			};
+			let wifiData = wifiRoom.data;
 			var self = this;
 			this.getDocMeta('0AvygZBLXTtZZdFFfZ3hhVUplZm5MSGljTTJLQmJScEE', function (err, meta) {
 				if (err) return self.say(room, text + 'An error occured while processing your command.');
-				var value = arg[1].replace(/\D/g, '');
+				let value = arg[1].replace(/\D/g, '');
 				if (value.length !== 12) return self.say(room, text + '"' + arg[1] + '" is not a valid FC.');
-				if (self.wifiRoom.docRevs[1] === meta.version) {
-					value = self.wifiRoom.scammers[value];
+				if (wifiData.docRevs[1] === meta.version) {
+					value = wifiData.scammers[value];
 					if (value) return self.say(room, text + '**The FC ' + arg[1] + ' belongs to a known scammer: ' + (value.length > 61 ? value + '..' : value) + '.**');
 					return self.say(room, text + 'This FC does not belong to a known scammer.');
 				}
-				self.wifiRoom.docRevs[1] = meta.version;
+				wifiData.docRevs[1] = meta.version;
 				self.getDocCsv(meta, function (data) {
 					csv(data, function (err, data) {
 						if (err) return self.say(room, text + 'An error occured while processing your command.');
-						for (var i = 0, len = data.length; i < len; i++) {
-							var str = data[i][1].replace(/\D/g, '');
-							var strLen = str.length;
+						for (let i = 0; i < data.length; i++) {
+							let str = data[i][1].replace(/\D/g, '');
+							let strLen = str.length;
 							if (str && strLen > 11) {
-								for (var j = 0; j < strLen; j += 12) {
-									self.wifiRoom.scammers[str.substr(j, 12)] = data[i][0];
+								for (let j = 0; j < strLen; j += 12) {
+									wifiData.scammers[str.substr(j, 12)] = data[i][0];
 								}
 							}
 						}
-						value = self.wifiRoom.scammers[value];
+						value = wifiData.scammers[value];
 						if (value) return self.say(room, text + '**The FC ' + arg[1] + ' belongs to a known scammer: ' + (value.length > 61 ? value.substr(0, 61) + '..' : value) + '.**');
-						return self.say(room, 'This FC does not belong to a known scammer.');
+						return self.say(room, text + 'This FC does not belong to a known scammer.');
 					});
 				});
 			});
 			break;
-		/*
 		case 'ocloners':
 		case 'onlinecloners':
 			if (!Config.googleapikey) return this.say(room, text + 'A Google API key has not been provided and is required for this command to work.');
-			this.wifiRoom = this.wifiroom || {docRevs: ['', ''], scammers : {}, cloners: []};
+			let wifiRoom = room.id === 'wifi' ? room : Rooms.get('wifi');
+			if (!wifiRoom) return false;
+			if (!wifiRoom.data) wifiRoom.data = {
+				docRevs: ['', ''],
+				scammers : {},
+				cloners: []
+			};
+			let wifiData = wifiRoom.data;
 			var self = this;
 			self.getDocMeta('0Avz7HpTxAsjIdFFSQ3BhVGpCbHVVdTJ2VVlDVVV6TWc', function (err, meta) {
-				if (err) {
-					console.log(err);
-					return self.say(room, text + 'An error occured while processing your command. Please report this!');
-				}
-				text = '/pm ' + by + ', ';
-				if (self.wifiRoom.docRevs[0] == meta.version) {
-					var found = [];
-					for (var i in self.wifiRoom.cloners) {
-						if (self.chatData[toId(self.wifiRoom.cloners[i][0])]) {
-							found.push('Name: ' + self.wifiRoom.cloners[i][0] + ' | FC: ' + self.wifiRoom.cloners[i][1] + ' | IGN: ' + self.wifiRoom.cloners[i][2]);
+				if (err) return self.say(room, text + 'An error occured while processing your command. Please report this!');
+				if (room !== user && !text) text += '/pm ' + user.id + ', ';
+				if (wifiData.docRevs[0] === meta.version) {
+					let found = [];
+					let cloners = wifiData.cloners;
+					for (let i in cloners) {
+						let cloner = cloners[i];
+						if (wifiRoom.users.get(toId(cloner[0]))) {
+							found.push('Name: ' + cloner[0] + ' | FC: ' + cloner[1] + ' | IGN: ' + cloner[2]);
 						}
 					}
-					if (!found.length) {
-						self.say(room, text + 'No cloners were found online.');
-						return;
-					}
-					var foundstr = found.join(' ');
-					if(foundstr.length > 266) {
-						self.uploadToHastebin("The following cloners are online :\n\n" + found.join('\n'), function (link) {
-							self.say(room, (room.charAt(0) === ',' ? "" : "/pm " + by + ", ") + link);
+					if (!found.length) return self.say(room, text + 'No cloners were found online.');
+
+					let foundStr = found.join(', ');
+					if (foundStr.length > 266) {
+						return self.uploadToHastebin("The following cloners are online :\n\n" + found.join('\n'), function (link) {
+							self.say(room, text + link);
 						});
-						return;
 					}
-					self.say(room, by, "The following cloners are online :\n\n" + foundstr);
-					return;
+					return self.say(room, text + "The following cloners are online: " + foundStr);
 				}
+
 				self.say(room, text + 'Cloners List changed. Updating...');
-				self.wifiRoom.docRevs[0] = meta.version;
+				wifiData.docRevs[0] = meta.version;
 				self.getDocCsv(meta, function (data) {
 					csv(data, function (err, data) {
-						if (err) {
-							console.log(err);
-							this.say(room, text + 'An error occured while processing your command. Please report this!');
-							return;
-						}
-						data.forEach(function (ent) {
-							var str = ent[1].replace(/\D/g, '');
+						if (err) return this.say(room, text + 'An error occured while processing your command. Please report this!');
+
+						let cloners = wifiData.cloners;
+						for (let i = 0; i < data.length; i++) {
+							let cloner = data[i];
+							let str = cloner[1].replace(/\D/g, '');
 							if (str && str.length >= 12) {
-								self.wifiRoom.cloners.push([ent[0], ent[1], ent[2]]);
+								cloners.push([cloner[0], cloner[1], cloner[2]]);
 							}
+						}
+
+						let found = [];
+						for (let i in cloners) {
+							let cloner = cloners[i];
+							if (wifiRoom.users.get(toId(cloner[0]))) {
+								found.push('Name: ' + cloner[0] + ' | FC: ' + cloner[1] + ' | IGN: ' + cloner[2]);
+							}
+						}
+						if (!found.length) return self.say(room, text + 'No cloners were found online.');
+
+						let foundStr = found.join(', ');
+						if (foundStr.length < 267) return self.say(room, text + "The following cloners are online :\n\n" + foundStr);
+						self.uploadToHastebin("The following cloners are online :\n\n" + found.join('\n'), function (link) {
+							self.say(room, text + link);
 						});
-						var found = [];
-						for (var i in self.wifiRoom.cloners) {
-							if (self.chatData[toId(self.wifiRoom.cloners[i][0])]) {
-								found.push('Name: ' + self.wifiRoom.cloners[i][0] + ' | FC: ' + self.wifiRoom.cloners[i][1] + ' | IGN: ' + self.wifiRoom.cloners[i][2]);
-							}
-						}
-						if (!found.length) {
-							self.say(room, text + 'No cloners were found online.');
-							return;
-						}
-						var foundstr = found.join(' ');
-						if (foundstr.length > 266) {
-							self.uploadToHastebin("The following cloners are online :\n\n" + found.join('\n'), function (link) {
-								self.say(room, (room.charAt(0) === ',' ? "" : "/pm " + by + ", ") + link);
-							});
-							return;
-						}
-						self.say(room, by, "The following cloners are online :\n\n" + foundstr);
 					});
 				});
 			});
 			break;
-			
-		*/
 		default:
 			return this.say(room, text + 'Unknown option. General links can be found here: http://pstradingroom.weebly.com/links.html');
 		}
 	},
 	mono: 'monotype',
-	monotype: function (arg, by, room) {
+	monotype: function (arg, user, room) {
 		// links and info for the monotype room
 		if (Config.serverid !== 'showdown') return false;
 		var text = '';
-		if (room === 'monotype') {
-			if (!this.canUse('monotype', room, by)) text += '/pm ' + by + ', ';
-		} else if (room.charAt(0) !== ',') {
+		if (room.id === 'monotype') {
+			if (!this.canUse('monotype', room, user)) text += '/pm ' + user.id + ', ';
+		} else if (room !== user) {
 			return false;
 		}
 		var messages = {
@@ -771,13 +784,13 @@ exports.commands = {
 		text += messages[toId(arg)] || 'Unknown option. If you are looking for something and unable to find it, please ask monotype room staff for help on where to locate what you are looking for. General information can be found here: http://monotypeps.weebly.com/';
 		this.say(room, text);
 	},
-	survivor: function (arg, by, room) {
+	survivor: function (arg, user, room) {
 		// contains links and info for survivor in the Survivor room
 		if (Config.serverid !== 'showdown') return false;
 		var text = '';
-		if (room === 'survivor') {
-			if (!this.canUse('survivor', room, by)) text += '/pm ' + by + ', ';
-		} else if (room.charAt(0) !== ',') {
+		if (room.id === 'survivor') {
+			if (!this.canUse('survivor', room, user)) text += '/pm ' + user.id + ', ';
+		} else if (room !== user) {
 			return false;
 		}
 		var gameTypes = {
@@ -792,13 +805,13 @@ exports.commands = {
 	},
 	thp: 'happy',
 	thehappyplace: 'happy',
-	happy: function (arg, by, room) {
+	happy: function (arg, user, room) {
 		// info for The Happy Place
 		if (Config.serverid !== 'showdown') return false;
 		var text = '';
 		if (room === 'thehappyplace') {
-			if (!this.canUse('happy', room, by)) text += '/pm ' + by + ', ';
-		} else if (room.charAt(0) !== ',') {
+			if (!this.canUse('happy', room, user)) text += '/pm ' + user.id + ', ';
+		} else if (room !== user) {
 			return false;
 		}
 		arg = toId(arg);
@@ -820,18 +833,18 @@ exports.commands = {
 
 
 	b: 'buzz',
-	buzz: function (arg, by, room) {
-		if (this.buzzed || !this.canUse('buzz', room, by) || room.charAt(0) === ',') return false;
+	buzz: function (arg, user, room) {
+		if (this.buzzed || !this.canUse('buzz', room, user) || room === user) return false;
 
-		this.say(room, '**' + by.substr(1) + ' has buzzed in!**');
-		this.buzzed = by;
+		this.say(room, '**' + user.name + ' has buzzed in!**');
+		this.buzzed = user;
 		this.buzzer = setTimeout(function (room, buzzMessage) {
 			this.say(room, buzzMessage);
 			this.buzzed = '';
-		}.bind(this), 7 * 1000, room, by + ', your time to answer is up!');
+		}.bind(this), 7 * 1000, room, user.name + ', your time to answer is up!');
 	},
-	reset: function (arg, by, room) {
-		if (!this.buzzed || !this.hasRank(by, '%@#&~') || room.charAt(0) === ',') return false;
+	reset: function (arg, user, room) {
+		if (!this.buzzed || !user.hasRank(room, '%') || room === user) return false;
 		clearTimeout(this.buzzer);
 		this.buzzed = '';
 		this.say(room, 'The buzzer has been reset.');
